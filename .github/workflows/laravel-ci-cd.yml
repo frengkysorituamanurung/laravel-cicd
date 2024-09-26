@@ -1,0 +1,85 @@
+name: CI/CD Laravel
+
+# Menjalankan pipeline pada push ke branch utama
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+# Matrix PHP untuk melakukan linting dan testing pada berbagai versi PHP
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        php-versions: ["8.0", "8.1", "8.2"]
+
+    services:
+      mysql:
+        image: mysql:5.7
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: testing_db
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping --silent"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=3
+
+    steps:
+      # Step untuk checkout kode
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      # Step untuk setup PHP
+      - name: Setup PHP ${{ matrix.php-versions }}
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php-versions }}
+          extensions: mbstring, intl, pdo, mysql
+
+      # Step untuk install dependencies menggunakan composer
+      - name: Install dependencies
+        run: composer install --prefer-dist --no-progress --no-suggest
+
+      # Step untuk menyalin file .env.testing dan generate APP_KEY
+      - name: Setup environment file
+        run: cp .env.example .env.testing && php artisan key:generate --env=testing
+
+      # Step untuk migrasi database testing
+      - name: Run migrations
+        run: php artisan migrate --env=testing --force
+
+      # Step untuk menjalankan testing unit
+      - name: Run tests
+        run: php artisan test --env=testing
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: test
+
+    steps:
+      # Step untuk checkout kode
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      # Step untuk menghubungkan ke server menggunakan SSH
+      - name: Deploy to Production Server
+        run: |
+          echo "${SSH_PRIVATE_KEY}" | ssh-add -
+          ssh -o StrictHostKeyChecking=no -T user@your-server.com << 'EOF'
+            cd /path/to/your/laravel/app
+            git pull origin main
+            composer install --no-dev --prefer-dist --optimize-autoloader
+            php artisan migrate --force
+            php artisan config:cache
+            php artisan route:cache
+            php artisan view:cache
+            php artisan optimize
+          EOF
